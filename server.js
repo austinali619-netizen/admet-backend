@@ -1,117 +1,231 @@
-// ==========================================
-// ADMET DIABETES PLATFORM - BACKEND SERVER
-// ==========================================
-
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const { Pool } = require('pg');
 
 const app = express();
+const PORT = process.env.PORT || 5000;
 
-// Enable CORS so Android App and Web Dashboard can communicate with server
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
 app.use(cors());
 app.use(express.json());
 
-// Middleware: Verify Bypass-Tunnel-Reminder header (for LocalTunnel)
-app.use((req, res, next) => {
-  // Allow requests and handle the custom tunnel header
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Bypass-Tunnel-Reminder");
-  next();
-});
-
-// ==========================================
-// MOCK IN-MEMORY DATABASE
-// ==========================================
-
-let foods = [
-  { id: 1, name: "Sukuma Wiki", category: "Non-Starchy Veggie", carbs: 4, portion: "1 cup", image: "https://via.placeholder.com/150" },
-  { id: 2, name: "Grilled Tilapia", category: "Lean Protein", carbs: 0, portion: "150g", image: "https://via.placeholder.com/150" },
-  { id: 3, name: "Brown Rice", category: "Healthy Carb", carbs: 45, portion: "1/2 cup", image: "https://via.placeholder.com/150" }
-];
-
-let videos = [
-  { id: 1, title: "Low Impact Walking", targetArea: "Full Body", duration: "15 mins", url: "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4" },
-  { id: 2, title: "Chair Exercises for Seniors", targetArea: "Joints & Legs", duration: "10 mins", url: "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4" }
-];
-
-let glucoseLogs = [
-  { id: 1, patientId: "P101", name: "Emmanuel M.", value: 5.8, unit: "mmol/L", context: "Fasting", timestamp: new Date().toISOString() }
-];
-
-let messages = [
-  { id: 1, patientId: "P101", sender: "patient", text: "Hello Doctor, my morning reading was 5.8 mmol/L.", timestamp: "08:30 AM" },
-  { id: 2, patientId: "P101", sender: "doctor", text: "Great job Emmanuel! Keep up with the non-starchy veggies today.", timestamp: "08:35 AM" }
-];
-
-// ==========================================
-// API ENDPOINTS
-// ==========================================
+// Initialize Database Tables
+const initDb = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100),
+        email VARCHAR(100) UNIQUE,
+        phone VARCHAR(20),
+        password VARCHAR(100),
+        role VARCHAR(20) DEFAULT 'patient', -- 'patient' or 'doctor'
+        is_paid BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS foods (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100),
+        category VARCHAR(50),
+        carbs INT,
+        portion VARCHAR(50),
+        image VARCHAR(255)
+      );
+      CREATE TABLE IF NOT EXISTS videos (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(100),
+        target_area VARCHAR(50),
+        duration VARCHAR(20),
+        url VARCHAR(255)
+      );
+      CREATE TABLE IF NOT EXISTS glucose_logs (
+        id SERIAL PRIMARY KEY,
+        patient_id VARCHAR(50),
+        value NUMERIC,
+        unit VARCHAR(10),
+        context VARCHAR(50),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS messages (
+        id SERIAL PRIMARY KEY,
+        patient_id VARCHAR(50),
+        sender VARCHAR(20),
+        text TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log("Database tables initialized with Users support!");
+  } catch (err) {
+    console.error("DB Init Error:", err.message);
+  }
+};
+initDb();
 
 // 1. Health Check
-app.get('/api/health', (req, res) => {
-  res.json({ status: "online", message: "Admet Server Running Successfully!" });
+app.get('/api/health', async (req, res) => {
+  try {
+    const dbTest = await pool.query('SELECT NOW()');
+    res.json({ status: "online", dbTime: dbTest.rows[0].now, message: "Admet Server Connected to Supabase!" });
+  } catch (err) {
+    res.status(500).json({ status: "error", error: err.message });
+  }
 });
 
-// 2. Diabetic Food Management (CRUD)
-app.get('/api/foods', (req, res) => {
-  res.json(foods);
+// 2. Authentication APIs (Sign Up & Log In)
+app.post('/api/register', async (req, res) => {
+  const { name, email, phone, password, role } = req.body;
+  try {
+    const userRole = role || 'patient';
+    const result = await pool.query(
+      'INSERT INTO users (name, email, phone, password, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, phone, role, is_paid',
+      [name, email, phone, password, userRole]
+    );
+    res.status(201).json({ message: "Registration successful", user: result.rows[0] });
+  } catch (err) {
+    res.status(400).json({ error: "Email or phone already registered" });
+  }
 });
 
-app.post('/api/foods', (req, res) => {
-  const newFood = { id: foods.length + 1, ...req.body };
-  foods.push(newFood);
-  res.status(201).json({ message: "Food added successfully", food: newFood });
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const result = await pool.query(
+      'SELECT id, name, email, phone, role, is_paid FROM users WHERE email = $1 AND password = $2',
+      [email, password]
+    );
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+    res.json({ message: "Login successful", user: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/foods/:id', (req, res) => {
-  const foodId = parseInt(req.params.id);
-  foods = foods.filter(f => f.id !== foodId);
-  res.json({ message: "Food item deleted successfully" });
+// Get All Registered Users (For Admin Analytics)
+app.get('/api/users', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name, email, phone, role, is_paid, created_at FROM users ORDER BY id DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 3. Exercise Video Management (Remote Sync Engine)
-app.get('/api/videos', (req, res) => {
-  res.json(videos);
+// 3. Diabetic Foods API
+app.get('/api/foods', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM foods ORDER BY id DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/videos', (req, res) => {
-  const newVideo = { id: videos.length + 1, ...req.body };
-  videos.push(newVideo);
-  res.status(201).json({ message: "Video uploaded successfully", video: newVideo });
+app.post('/api/foods', async (req, res) => {
+  const { name, category, carbs, portion, image } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO foods (name, category, carbs, portion, image) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [name, category, carbs, portion, image]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/videos/:id', (req, res) => {
-  const videoId = parseInt(req.params.id);
-  videos = videos.filter(v => v.id !== videoId);
-  res.json({ message: "Video deleted. Patient devices will reconcile local storage.", deletedId: videoId });
+app.delete('/api/foods/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM foods WHERE id = $1', [req.params.id]);
+    res.json({ message: "Food item deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 4. Glucose Monitoring Logs
-app.get('/api/glucose/:patientId', (req, res) => {
-  const patientLogs = glucoseLogs.filter(g => g.patientId === req.params.patientId);
-  res.json(patientLogs);
+// 4. Exercise Videos API
+app.get('/api/videos', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM videos ORDER BY id DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/glucose', (req, res) => {
-  const newLog = { id: glucoseLogs.length + 1, timestamp: new Date().toISOString(), ...req.body };
-  glucoseLogs.push(newLog);
-  res.status(201).json({ message: "Glucose log saved", log: newLog });
+app.post('/api/videos', async (req, res) => {
+  const { title, targetArea, duration, url } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO videos (title, target_area, duration, url) VALUES ($1, $2, $3, $4) RETURNING *',
+      [title, targetArea, duration, url]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// 5. Doctor-Patient Messaging
-app.get('/api/messages/:patientId', (req, res) => {
-  const patientMsgs = messages.filter(m => m.patientId === req.params.patientId);
-  res.json(patientMsgs);
+app.delete('/api/videos/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM videos WHERE id = $1', [req.params.id]);
+    res.json({ message: "Video deleted successfully", deletedId: req.params.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/messages', (req, res) => {
-  const newMsg = { id: messages.length + 1, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), ...req.body };
-  messages.push(newMsg);
-  res.status(201).json({ message: "Message sent", data: newMsg });
+// 5. Glucose Monitoring API
+app.get('/api/glucose/:patientId', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM glucose_logs WHERE patient_id = $1 ORDER BY created_at DESC', [req.params.patientId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Use port assigned by cloud host, or default to 5000 locally
-const PORT = process.env.PORT || 5000;
+app.post('/api/glucose', async (req, res) => {
+  const { patientId, value, unit, context } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO glucose_logs (patient_id, value, unit, context) VALUES ($1, $2, $3, $4) RETURNING *',
+      [patientId, value, unit, context]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Consultation Messages API
+app.get('/api/messages/:patientId', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM messages WHERE patient_id = $1 ORDER BY created_at ASC', [req.params.patientId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/messages', async (req, res) => {
+  const { patientId, sender, text } = req.body;
+  try {
+    const result = await pool.query(
+      'INSERT INTO messages (patient_id, sender, text) VALUES ($1, $2, $3) RETURNING *',
+      [patientId, sender, text]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`🚀 Admet Server running on port ${PORT}`);
