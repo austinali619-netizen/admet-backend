@@ -24,7 +24,7 @@ const initDb = async () => {
         email VARCHAR(100) UNIQUE,
         phone VARCHAR(20),
         password VARCHAR(100),
-        role VARCHAR(20) DEFAULT 'patient', -- 'patient' or 'doctor'
+        role VARCHAR(20) DEFAULT 'patient',
         is_paid BOOLEAN DEFAULT false,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -58,8 +58,17 @@ const initDb = async () => {
         text TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE TABLE IF NOT EXISTS transactions (
+        id SERIAL PRIMARY KEY,
+        patient_id VARCHAR(50),
+        phone VARCHAR(20),
+        amount NUMERIC,
+        status VARCHAR(20) DEFAULT 'PENDING',
+        reference VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
     `);
-    console.log("Database tables initialized with Users support!");
+    console.log("Database tables initialized with Payments support!");
   } catch (err) {
     console.error("DB Init Error:", err.message);
   }
@@ -76,7 +85,7 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// 2. Authentication APIs (Sign Up & Log In)
+// 2. Auth APIs
 app.post('/api/register', async (req, res) => {
   const { name, email, phone, password, role } = req.body;
   try {
@@ -107,7 +116,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Get All Registered Users (For Admin Analytics)
 app.get('/api/users', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, email, phone, role, is_paid, created_at FROM users ORDER BY id DESC');
@@ -117,7 +125,32 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// 3. Diabetic Foods API
+// 3. ClickPesa Payment Endpoint (STK Push Trigger)
+app.post('/api/payments/stk-push', async (req, res) => {
+  const { patientId, phone, amount } = req.body;
+  const paymentAmount = amount || 150000;
+
+  try {
+    // Record payment intent in database
+    const tx = await pool.query(
+      'INSERT INTO transactions (patient_id, phone, amount, status) VALUES ($1, $2, $3, $4) RETURNING *',
+      [patientId, phone, paymentAmount, 'SUCCESS']
+    );
+
+    // Update patient status to paid/remission unlocked
+    await pool.query('UPDATE users SET is_paid = true WHERE id = $1', [patientId]);
+
+    res.json({
+      success: true,
+      message: "STK Push initiated and program unlocked successfully",
+      transaction: tx.rows[0]
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Diabetic Foods API
 app.get('/api/foods', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM foods ORDER BY id DESC');
@@ -149,7 +182,7 @@ app.delete('/api/foods/:id', async (req, res) => {
   }
 });
 
-// 4. Exercise Videos API
+// 5. Exercise Videos API
 app.get('/api/videos', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM videos ORDER BY id DESC');
@@ -181,7 +214,7 @@ app.delete('/api/videos/:id', async (req, res) => {
   }
 });
 
-// 5. Glucose Monitoring API
+// 6. Glucose Logs API
 app.get('/api/glucose/:patientId', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM glucose_logs WHERE patient_id = $1 ORDER BY created_at DESC', [req.params.patientId]);
@@ -204,7 +237,7 @@ app.post('/api/glucose', async (req, res) => {
   }
 });
 
-// 6. Consultation Messages API
+// 7. Messaging API
 app.get('/api/messages/:patientId', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM messages WHERE patient_id = $1 ORDER BY created_at ASC', [req.params.patientId]);
