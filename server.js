@@ -6,6 +6,7 @@ const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// PostgreSQL Connection Pool using Supabase IPv4 Pooler URL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
@@ -68,14 +69,14 @@ const initDb = async () => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
-    console.log("Database tables initialized with Payments support!");
+    console.log("🚀 Database tables initialized with Payments support!");
   } catch (err) {
     console.error("DB Init Error:", err.message);
   }
 };
 initDb();
 
-// 1. Health Check
+// 1. Health Check Endpoint
 app.get('/api/health', async (req, res) => {
   try {
     const dbTest = await pool.query('SELECT NOW()');
@@ -85,7 +86,7 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// 2. Auth APIs
+// 2. Authentication APIs
 app.post('/api/register', async (req, res) => {
   const { name, email, phone, password, role } = req.body;
   try {
@@ -125,28 +126,73 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// 3. ClickPesa Payment Endpoint (STK Push Trigger)
+// 3. ClickPesa Live Payment Endpoint (Real USSD STK Push)
 app.post('/api/payments/stk-push', async (req, res) => {
   const { patientId, phone, amount } = req.body;
   const paymentAmount = amount || 100000;
 
+  // Format phone number to international format (255XXXXXXXXX)
+  let formattedPhone = phone ? phone.replace(/[^0-9]/g, '') : '';
+  if (formattedPhone.startsWith('0')) {
+    formattedPhone = '255' + formattedPhone.slice(1);
+  }
+
   try {
-    // Record payment intent in database
-    const tx = await pool.query(
-      'INSERT INTO transactions (patient_id, phone, amount, status) VALUES ($1, $2, $3, $4) RETURNING *',
-      [patientId, phone, paymentAmount, 'SUCCESS']
-    );
-
-    // Update patient status to paid/remission unlocked
-    await pool.query('UPDATE users SET is_paid = true WHERE id = $1', [patientId]);
-
-    res.json({
-      success: true,
-      message: "STK Push initiated and program unlocked successfully",
-      transaction: tx.rows[0]
+    // Step 1: Request Bearer Token from ClickPesa API
+    const tokenResponse = await fetch('https://api.clickpesa.com/third-party/v1/authorization', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': process.env.CLICKPESA_API_KEY,
+        'client-id': process.env.CLICKPESA_CLIENT_ID
+      }
     });
+
+    const tokenData = await tokenResponse.json();
+
+    if (!tokenResponse.ok || !tokenData.token) {
+      console.error("ClickPesa Auth Failed:", tokenData);
+      return res.status(400).json({ success: false, error: "Failed to authenticate with ClickPesa." });
+    }
+
+    // Step 2: Trigger USSD STK Push to Patient's Phone
+    const paymentResponse = await fetch('https://api.clickpesa.com/third-party/v1/payments/stk-push', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${tokenData.token}`
+      },
+      body: JSON.stringify({
+        amount: paymentAmount,
+        currency: "TZS",
+        phoneNumber: formattedPhone,
+        orderId: `ADMET-${patientId}-${Date.now()}`,
+        description: "Admet Diabetes Remission Program"
+      })
+    });
+
+    const paymentResult = await paymentResponse.json();
+
+    if (paymentResponse.ok && paymentResult.status !== 'FAILED') {
+      // Record transaction in database
+      await pool.query(
+        'INSERT INTO transactions (patient_id, phone, amount, status, reference) VALUES ($1, $2, $3, $4, $5)',
+        [patientId, formattedPhone, paymentAmount, 'PENDING', paymentResult.reference || 'STK_PUSH']
+      );
+
+      res.json({
+        success: true,
+        message: "USSD Prompt sent to phone. Enter Mobile Money PIN to complete payment.",
+        paymentResult
+      });
+    } else {
+      console.error("ClickPesa STK Push Failed:", paymentResult);
+      res.status(400).json({ success: false, error: paymentResult.message || "STK Push request failed" });
+    }
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Payment Server Error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
