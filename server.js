@@ -128,7 +128,7 @@ app.get('/api/users', async (req, res) => {
 // 3. ClickPesa Payment Endpoint (STK Push Trigger)
 app.post('/api/payments/stk-push', async (req, res) => {
   const { patientId, phone, amount } = req.body;
-  const paymentAmount = amount || 150000;
+  const paymentAmount = amount || 100000;
 
   try {
     // Record payment intent in database
