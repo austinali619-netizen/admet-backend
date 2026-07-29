@@ -138,11 +138,10 @@ app.post('/api/payments/stk-push', async (req, res) => {
   }
 
   try {
-    // Step 1: Request Bearer Token from ClickPesa API
-    const tokenResponse = await fetch('https://api.clickpesa.com/third-party/v1/authorization', {
+    // Step 1: Request JWT Authorization Token from ClickPesa
+    const tokenResponse = await fetch('https://api.clickpesa.com/third-parties/generate-token', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         'api-key': process.env.CLICKPESA_API_KEY,
         'client-id': process.env.CLICKPESA_CLIENT_ID
       }
@@ -151,30 +150,32 @@ app.post('/api/payments/stk-push', async (req, res) => {
     const tokenData = await tokenResponse.json();
 
     if (!tokenResponse.ok || !tokenData.token) {
-      console.error("ClickPesa Auth Failed:", tokenData);
-      return res.status(400).json({ success: false, error: "Failed to authenticate with ClickPesa." });
+      console.error("ClickPesa Auth Error Details:", tokenData);
+      return res.status(400).json({ 
+        success: false, 
+        error: "Failed to authenticate with ClickPesa.", 
+        clickpesaError: tokenData 
+      });
     }
 
-    // Step 2: Trigger USSD STK Push to Patient's Phone
-    const paymentResponse = await fetch('https://api.clickpesa.com/third-party/v1/payments/stk-push', {
+    // Step 2: Initiate USSD Push Request
+    const paymentResponse = await fetch('https://api.clickpesa.com/third-parties/payments/initiate-ussd-push-request', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${tokenData.token}`
+        'Authorization': tokenData.token
       },
       body: JSON.stringify({
-        amount: paymentAmount,
+        amount: String(paymentAmount),
         currency: "TZS",
         phoneNumber: formattedPhone,
-        orderId: `ADMET-${patientId}-${Date.now()}`,
-        description: "Admet Diabetes Remission Program"
+        orderReference: `ADMET-${patientId}-${Date.now()}`
       })
     });
 
     const paymentResult = await paymentResponse.json();
 
-    if (paymentResponse.ok && paymentResult.status !== 'FAILED') {
-      // Record transaction in database
+    if (paymentResponse.ok) {
       await pool.query(
         'INSERT INTO transactions (patient_id, phone, amount, status, reference) VALUES ($1, $2, $3, $4, $5)',
         [patientId, formattedPhone, paymentAmount, 'PENDING', paymentResult.reference || 'STK_PUSH']
@@ -182,12 +183,16 @@ app.post('/api/payments/stk-push', async (req, res) => {
 
       res.json({
         success: true,
-        message: "USSD Prompt sent to phone. Enter Mobile Money PIN to complete payment.",
+        message: "USSD Prompt sent to phone.",
         paymentResult
       });
     } else {
       console.error("ClickPesa STK Push Failed:", paymentResult);
-      res.status(400).json({ success: false, error: paymentResult.message || "STK Push request failed" });
+      res.status(400).json({ 
+        success: false, 
+        error: paymentResult.message || "STK Push request failed", 
+        paymentResult 
+      });
     }
 
   } catch (err) {
