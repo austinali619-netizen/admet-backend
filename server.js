@@ -137,6 +137,9 @@ app.post('/api/payments/stk-push', async (req, res) => {
     formattedPhone = '255' + formattedPhone.slice(1);
   }
 
+  // Strictly alphanumeric order reference (no hyphens or special chars)
+  const cleanOrderRef = `ADMET${patientId}${Date.now()}`;
+
   try {
     // Step 1: Request JWT Authorization Token from ClickPesa
     const tokenResponse = await fetch('https://api.clickpesa.com/third-parties/generate-token', {
@@ -169,7 +172,7 @@ app.post('/api/payments/stk-push', async (req, res) => {
         amount: String(paymentAmount),
         currency: "TZS",
         phoneNumber: formattedPhone,
-        orderReference: `ADMET-${patientId}-${Date.now()}`
+        orderReference: cleanOrderRef
       })
     });
 
@@ -178,7 +181,7 @@ app.post('/api/payments/stk-push', async (req, res) => {
     if (paymentResponse.ok) {
       await pool.query(
         'INSERT INTO transactions (patient_id, phone, amount, status, reference) VALUES ($1, $2, $3, $4, $5)',
-        [patientId, formattedPhone, paymentAmount, 'PENDING', paymentResult.reference || 'STK_PUSH']
+        [patientId, formattedPhone, paymentAmount, 'PENDING', cleanOrderRef]
       );
 
       res.json({
