@@ -2,9 +2,19 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const multer = require('multer');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Initialize Multer for memory storage (buffers files before sending to Supabase)
+const upload = multer({ storage: multer.memoryStorage() });
+
+// Initialize Supabase Client for Storage uploads
+const supabaseUrl = process.env.SUPABASE_URL || 'https://cexzxfwuokonawjecwyr.supabase.co';
+const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // PostgreSQL Connection Pool using Supabase IPv4 Pooler URL
 const pool = new Pool({
@@ -86,7 +96,48 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// 2. Authentication APIs
+// 2. Image Upload Endpoint (Uploads to Supabase Storage Bucket 'food-images')
+app.post('/api/upload', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    const file = req.file;
+    const fileExtension = file.originalname.split('.').pop();
+    const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExtension}`;
+
+    // Upload image buffer directly to Supabase storage bucket 'food-images'
+    const { data, error } = await supabase.storage
+      .from('food-images')
+      .upload(fileName, file.buffer, {
+        contentType: file.mimetype,
+        upsert: true
+      });
+
+    if (error) {
+      console.error("Supabase Storage Error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    // Get the public direct image URL
+    const { data: publicUrlData } = supabase.storage
+      .from('food-images')
+      .getPublicUrl(fileName);
+
+    res.status(200).json({
+      success: true,
+      message: 'Upload successful!',
+      imageUrl: publicUrlData.publicUrl
+    });
+
+  } catch (err) {
+    console.error("Upload Route Error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 3. Authentication APIs
 app.post('/api/register', async (req, res) => {
   const { name, email, phone, password, role } = req.body;
   try {
@@ -126,7 +177,7 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// 3. ClickPesa Live Payment Endpoint (Real USSD STK Push)
+// 4. ClickPesa Live Payment Endpoint (Real USSD STK Push)
 app.post('/api/payments/stk-push', async (req, res) => {
   const { patientId, phone, amount } = req.body;
   const paymentAmount = amount || 100000;
@@ -204,7 +255,7 @@ app.post('/api/payments/stk-push', async (req, res) => {
   }
 });
 
-// 4. Diabetic Foods API
+// 5. Diabetic Foods API
 app.get('/api/foods', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM foods ORDER BY id DESC');
@@ -236,7 +287,7 @@ app.delete('/api/foods/:id', async (req, res) => {
   }
 });
 
-// 5. Exercise Videos API
+// 6. Exercise Videos API
 app.get('/api/videos', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM videos ORDER BY id DESC');
@@ -268,7 +319,7 @@ app.delete('/api/videos/:id', async (req, res) => {
   }
 });
 
-// 6. Glucose Logs API
+// 7. Glucose Logs API
 app.get('/api/glucose/:patientId', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM glucose_logs WHERE patient_id = $1 ORDER BY created_at DESC', [req.params.patientId]);
@@ -291,7 +342,7 @@ app.post('/api/glucose', async (req, res) => {
   }
 });
 
-// 7. Messaging API
+// 8. Messaging API
 app.get('/api/messages/:patientId', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM messages WHERE patient_id = $1 ORDER BY created_at ASC', [req.params.patientId]);
