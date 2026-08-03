@@ -2,6 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
+const http = require('http');
+const { WebSocketServer } = require('ws');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -350,6 +352,23 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// 8. Create HTTP Server & Mount WebSocket Server
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+wss.on('connection', (ws) => {
+  console.log('⚡ Client connected via WebSocket');
+
+  ws.on('message', (message) => {
+    console.log('Received:', message.toString());
+  });
+
+  ws.on('close', () => {
+    console.log('❌ Client disconnected');
+  });
+});
+
+// Start unified server
+server.listen(PORT, () => {
   console.log(`🚀 Admet Server running on port ${PORT}`);
 });
