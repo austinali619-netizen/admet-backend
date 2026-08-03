@@ -1,0 +1,5 @@
+Name: AdmetAPI
+
+Client ID: ID05VuT2veSNCOl9jAPC0WNOXSpcGkGo
+
+API Key: SKdd6tTjEM6TmjkeCW1dwmqN75T3cZcTHNB0ZLOtYT
