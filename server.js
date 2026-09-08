@@ -250,7 +250,7 @@ app.delete('/api/foods/:id', async (req, res) => {
   }
 });
 
-// 5. Exercise Videos API (Updated to support new metadata fields & thumbnails)
+// 5. Exercise Videos API
 app.get('/api/videos', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM videos ORDER BY id DESC');
@@ -355,12 +355,19 @@ app.post('/api/messages', async (req, res) => {
 // 8. ClickPesa Webhook Payment Confirmation Endpoint
 app.post('/api/payments/webhook', async (req, res) => {
   try {
-    const { status, reference, phoneNumber, phone } = req.body;
-    const clientPhone = phoneNumber || phone;
+    const payload = req.body;
+    const status = payload.status || payload.event;
+    const reference = payload.reference || payload.orderReference;
+    const clientPhone = payload.phoneNumber || payload.phone || payload.msisdn;
 
-    console.log("Received payment notification:", req.body);
+    console.log("Received ClickPesa webhook notification:", payload);
 
-    if (status === 'SUCCESS' || status === 'PAID' || status === 'COMPLETED') {
+    if (
+      status === 'PAYMENT RECEIVED' || 
+      status === 'SUCCESS' || 
+      status === 'PAID' || 
+      status === 'COMPLETED'
+    ) {
       // Update transaction status
       if (reference) {
         await pool.query(
@@ -371,7 +378,7 @@ app.post('/api/payments/webhook', async (req, res) => {
 
       // Update user paid status in database
       if (clientPhone) {
-        let cleanPhone = clientPhone.replace(/[^0-9]/g, '');
+        let cleanPhone = String(clientPhone).replace(/[^0-9]/g, '');
         if (cleanPhone.startsWith('0')) {
           cleanPhone = '255' + cleanPhone.slice(1);
         }
@@ -379,6 +386,27 @@ app.post('/api/payments/webhook', async (req, res) => {
         await pool.query(
           "UPDATE users SET is_paid = true WHERE phone LIKE $1",
           [`%${cleanPhone.slice(-9)}`]
+        );
+      }
+
+      // Broadcast payment update to all active WebSocket clients
+      wss.clients.forEach((client) => {
+        if (client.readyState === 1) { // WebSocket.OPEN
+          client.send(JSON.stringify({
+            event: 'PAYMENT_SUCCESS',
+            reference,
+            phone: clientPhone
+          }));
+        }
+      });
+    } else if (
+      status === 'PAYMENT FAILED' || 
+      status === 'FAILED'
+    ) {
+      if (reference) {
+        await pool.query(
+          "UPDATE transactions SET status = 'FAILED' WHERE reference = $1",
+          [reference]
         );
       }
     }
