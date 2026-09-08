@@ -352,7 +352,45 @@ app.post('/api/messages', async (req, res) => {
   }
 });
 
-// 8. Create HTTP Server & Mount WebSocket Server
+// 8. ClickPesa Webhook Payment Confirmation Endpoint
+app.post('/api/payments/webhook', async (req, res) => {
+  try {
+    const { status, reference, phoneNumber, phone } = req.body;
+    const clientPhone = phoneNumber || phone;
+
+    console.log("Received payment notification:", req.body);
+
+    if (status === 'SUCCESS' || status === 'PAID' || status === 'COMPLETED') {
+      // Update transaction status
+      if (reference) {
+        await pool.query(
+          "UPDATE transactions SET status = 'COMPLETED' WHERE reference = $1",
+          [reference]
+        );
+      }
+
+      // Update user paid status in database
+      if (clientPhone) {
+        let cleanPhone = clientPhone.replace(/[^0-9]/g, '');
+        if (cleanPhone.startsWith('0')) {
+          cleanPhone = '255' + cleanPhone.slice(1);
+        }
+
+        await pool.query(
+          "UPDATE users SET is_paid = true WHERE phone LIKE $1",
+          [`%${cleanPhone.slice(-9)}`]
+        );
+      }
+    }
+
+    res.status(200).json({ received: true });
+  } catch (err) {
+    console.error("Webhook Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 9. Create HTTP Server & Mount WebSocket Server
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
